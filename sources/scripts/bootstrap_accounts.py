@@ -12,11 +12,24 @@ def extract_hcl_block(filepath):
     try:
         with open(filepath, "r") as f:
             obj = hcl2.load(f)
-            if "locals" in obj and "account_request" in obj["locals"]:
-                print(f"🔎 'account_request' found in: {filepath}")
-                return obj["locals"]["account_request"]
-            else:
-                print(f"⚠️ No 'account_request' block in: {filepath}")
+
+            if "locals" in obj:
+                locals_block = obj["locals"]
+
+                # If 'locals' is a list of dicts
+                if isinstance(locals_block, list):
+                    for block in locals_block:
+                        if "account_request" in block:
+                            print(f"🔎 'account_request' found (list) in: {filepath}")
+                            return block["account_request"]
+
+                # If 'locals' is a flat dict
+                elif isinstance(locals_block, dict):
+                    if "account_request" in locals_block:
+                        print(f"🔎 'account_request' found (dict) in: {filepath}")
+                        return locals_block["account_request"]
+
+            print(f"⚠️ No 'account_request' block in: {filepath}")
     except Exception as e:
         print(f"❌ Error parsing {filepath}: {e}")
     return None
@@ -31,6 +44,7 @@ def main():
                 full_path = os.path.join(root, file)
                 print(f"📄 Found .tf file: {full_path}")
                 request_data = extract_hcl_block(full_path)
+
                 if request_data and "control_tower_parameters" in request_data:
                     message_body = {
                         "operation": "ADD",
