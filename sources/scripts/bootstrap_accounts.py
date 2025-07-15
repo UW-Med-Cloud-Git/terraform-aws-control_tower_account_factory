@@ -12,22 +12,24 @@ def extract_hcl_block(filepath):
     try:
         with open(filepath, "r") as f:
             obj = hcl2.load(f)
-            for block in obj.get("locals", []):
-                if "account_request" in block:
-                    return block["account_request"]
+            if "locals" in obj and "account_request" in obj["locals"]:
+                print(f"🔎 'account_request' found in: {filepath}")
+                return obj["locals"]["account_request"]
+            else:
+                print(f"⚠️ No 'account_request' block in: {filepath}")
     except Exception as e:
         print(f"❌ Error parsing {filepath}: {e}")
     return None
 
 def main():
-    account_requests_root = "./AWS-AFT-Account-Requests/terraform"
-    print(f"🔍 Searching for .tf files in: {account_requests_root}")
+    account_requests_root = "./account-requests/terraform"
+    print(f"🔍 Scanning directory: {account_requests_root}")
 
     for root, _, files in os.walk(account_requests_root):
         for file in files:
             if file.endswith(".tf"):
                 full_path = os.path.join(root, file)
-                print(f"📁 Scanning: {full_path}")
+                print(f"📄 Found .tf file: {full_path}")
                 request_data = extract_hcl_block(full_path)
                 if request_data and "control_tower_parameters" in request_data:
                     message_body = {
@@ -44,7 +46,7 @@ def main():
                         MessageGroupId=MESSAGE_GROUP_ID
                     )
                 else:
-                    print(f"⚠️ No valid account_request block in: {file}")
+                    print(f"⚠️ Skipping file: {file} — no valid request block found.")
 
 if __name__ == "__main__":
     main()
