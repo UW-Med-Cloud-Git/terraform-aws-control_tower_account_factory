@@ -8,6 +8,7 @@ import hcl2
 SQS_QUEUE_URL = "https://sqs.us-west-2.amazonaws.com/530256939043/aft-account-request.fifo"
 MESSAGE_GROUP_ID = "account-request"
 REGION = "us-west-2"
+DDB_TABLE_NAME = "aft-request"
 
 def extract_hcl_block(filepath):
     try:
@@ -17,14 +18,12 @@ def extract_hcl_block(filepath):
             if "locals" in obj:
                 locals_block = obj["locals"]
 
-                # If 'locals' is a list of dicts
                 if isinstance(locals_block, list):
                     for block in locals_block:
                         if "account_request" in block:
                             print(f"🔎 'account_request' found (list) in: {filepath}")
                             return block["account_request"]
 
-                # If 'locals' is a flat dict
                 elif isinstance(locals_block, dict):
                     if "account_request" in locals_block:
                         print(f"🔎 'account_request' found (dict) in: {filepath}")
@@ -35,9 +34,22 @@ def extract_hcl_block(filepath):
         print(f"❌ Error parsing {filepath}: {e}")
     return None
 
+def write_to_dynamodb(ddb, request_data):
+    email = request_data["control_tower_parameters"]["SSOEmail"]
+    item = {
+        "id": {"S": email},
+        "account_request": {"S": json.dumps(request_data)},
+        "operation": {"S": "ADD"}
+    }
+    print(f"📝 Writing to DynamoDB: {email}")
+    ddb.put_item(TableName=DDB_TABLE_NAME, Item=item)
+
 def main():
     account_requests_root = "./account-requests/terraform"
     print(f"🔍 Scanning directory: {account_requests_root}")
+
+    sqs = boto3.client("sqs", region_name=REGION)
+    ddb = boto3.client("dynamodb", region_name=REGION)
 
     for root, _, files in os.walk(account_requests_root):
         for file in files:
@@ -53,8 +65,8 @@ def main():
                         "account_tags": request_data.get("account_tags", {}),
                         "custom_fields": request_data.get("custom_fields", {})
                     }
+
                     print(f"✅ Sending request from: {file}")
-                    sqs = boto3.client("sqs", region_name=REGION)
                     response = sqs.send_message(
                         QueueUrl=SQS_QUEUE_URL,
                         MessageBody=json.dumps(message_body),
@@ -62,6 +74,9 @@ def main():
                         MessageDeduplicationId=str(uuid.uuid4())
                     )
                     print(f"📨 SQS response: {response}")
+
+                    write_to_dynamodb(ddb, message_body)
+
                 else:
                     print(f"⚠️ Skipping file: {file} — no valid request block found.")
 
