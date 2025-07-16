@@ -35,14 +35,17 @@ def extract_hcl_block(filepath):
     return None
 
 def write_to_dynamodb(ddb, request_data):
-    email = request_data["control_tower_parameters"]["SSOEmail"]
+    email = request_data["control_tower_parameters"]["SSOUserEmail"]
     item = {
         "id": {"S": email},
         "account_request": {"S": json.dumps(request_data)},
         "operation": {"S": "ADD"}
     }
-    print(f"📝 Writing to DynamoDB: {email}")
-    ddb.put_item(TableName=DDB_TABLE_NAME, Item=item)
+    try:
+        print(f"📝 Writing to DynamoDB: {email}")
+        ddb.put_item(TableName=DDB_TABLE_NAME, Item=item)
+    except KeyError as e:
+        print(f"⚠️ Skipping DynamoDB write — missing key: {e}")
 
 def main():
     account_requests_root = "./account-requests/terraform"
