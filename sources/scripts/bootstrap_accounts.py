@@ -1,5 +1,6 @@
 import os
 import json
+import uuid
 import boto3
 import hcl2
 
@@ -54,11 +55,13 @@ def main():
                     }
                     print(f"✅ Sending request from: {file}")
                     sqs = boto3.client("sqs", region_name=REGION)
-                    sqs.send_message(
+                    response = sqs.send_message(
                         QueueUrl=SQS_QUEUE_URL,
                         MessageBody=json.dumps(message_body),
-                        MessageGroupId=MESSAGE_GROUP_ID
+                        MessageGroupId=MESSAGE_GROUP_ID,
+                        MessageDeduplicationId=str(uuid.uuid4())
                     )
+                    print(f"📨 SQS response: {response}")
                 else:
                     print(f"⚠️ Skipping file: {file} — no valid request block found.")
 
