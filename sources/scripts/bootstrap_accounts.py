@@ -71,7 +71,7 @@ def assume_ct_session():
         region_name=REGION
     )
 
-def provision_account(session, account_name, email, ou, tags):
+def provision_account(session, account_name, email, ou, tags, acct):
     sc = session.client("servicecatalog")
     try:
         print(f"📦 Submitting provisioning request for {account_name} to Service Catalog")
@@ -79,16 +79,14 @@ def provision_account(session, account_name, email, ou, tags):
             ProductId=PRODUCT_ID,
             ProvisioningArtifactId=ARTIFACT_ID,
             ProvisionedProductName=account_name,
-ProvisioningParameters=[
-    {"Key": "AccountName", "Value": account_name},
-    {"Key": "SSOUserEmail", "Value": email},
-    {"Key": "AccountEmail", "Value": email},
-    {"Key": "ManagedOrganizationalUnit", "Value": ou},
-    {"Key": "FirstName", "Value": tags.get("SSOUserFirstName", "")},
-    {"Key": "LastName", "Value": tags.get("SSOUserLastName", "")}
-]
-
-,
+            ProvisioningParameters=[
+                {"Key": "AccountName", "Value": account_name},
+                {"Key": "SSOUserEmail", "Value": email},
+                {"Key": "AccountEmail", "Value": email},
+                {"Key": "ManagedOrganizationalUnit", "Value": ou},
+                {"Key": "FirstName", "Value": acct["SSOUserFirstName"]},
+                {"Key": "LastName", "Value": acct["SSOUserLastName"]}
+            ],
             Tags=[{"Key": k, "Value": v} for k, v in tags.items()]
         )
         record_id = response["RecordDetail"]["RecordId"]
@@ -137,7 +135,8 @@ def main():
                         acct["AccountName"],
                         acct["SSOUserEmail"],
                         acct["ManagedOrganizationalUnit"],
-                        message_body.get("account_tags", {})
+                        message_body.get("account_tags", {}),
+                        acct
                     )
 
                 else:
