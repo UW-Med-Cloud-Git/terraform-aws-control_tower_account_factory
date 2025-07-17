@@ -24,7 +24,6 @@ def send_sqs_message(session, queue_url, message_body, message_group_id):
     """Sends a message to the specified SQS queue."""
     sqs = session.client("sqs")
     try:
-        # MODIFICATION: Added MessageGroupId for FIFO queues
         response = sqs.send_message(
             QueueUrl=queue_url,
             MessageBody=json.dumps(message_body),
@@ -36,13 +35,16 @@ def send_sqs_message(session, queue_url, message_body, message_group_id):
         logger.error(f"Failed to send message to SQS queue {queue_url}: {e}")
         raise
 
-def provision_account(session, product_id, provisioning_artifact_id, account_name, ct_params):
+# MODIFICATION: Added path_id parameter
+def provision_account(session, product_id, provisioning_artifact_id, account_name, ct_params, path_id):
     """Provisions a new account using AWS Service Catalog."""
     sc = session.client("servicecatalog")
     try:
+        logger.info(f"Attempting to provision product using PathId: {path_id}")
         response = sc.provision_product(
             ProductId=product_id,
             ProvisioningArtifactId=provisioning_artifact_id,
+            PathId=path_id,  # MODIFICATION: Use the specific launch path ID
             ProvisionedProductName=account_name,
             ProvisioningParameters=[
                 {"Key": "AccountEmail", "Value": ct_params["AccountEmail"]},
@@ -68,13 +70,14 @@ def main():
     sqs_queue_url = os.environ.get("SQS_QUEUE_URL")
     sc_product_id = os.environ.get("SC_PRODUCT_ID")
     sc_provisioning_artifact_id = os.environ.get("SC_PROVISIONING_ARTIFACT_ID")
+    # MODIFICATION: Get the Launch Path ID from an environment variable
+    sc_launch_path_id = os.environ.get("SC_LAUNCH_PATH_ID")
 
-    if not all([sqs_queue_url, sc_product_id, sc_provisioning_artifact_id]):
-        logger.error("Missing required environment variables: SQS_QUEUE_URL, SC_PRODUCT_ID, SC_PROVISIONING_ARTIFACT_ID")
+    if not all([sqs_queue_url, sc_product_id, sc_provisioning_artifact_id, sc_launch_path_id]):
+        logger.error("Missing required environment variables: SQS_QUEUE_URL, SC_PRODUCT_ID, SC_PROVISIONING_ARTIFACT_ID, SC_LAUNCH_PATH_ID")
         raise ValueError("Missing required environment variables.")
 
-    # The buildspec already assumes the correct role.
-    # Boto3 will automatically use the credentials from the environment variables.
+
     logger.info(f"Creating Boto3 session in {ct_management_region} using credentials from the environment.")
     ct_session = boto3.Session(region_name=ct_management_region)
 
@@ -116,7 +119,6 @@ def main():
                     logger.info(f"✅ Preparing to send request from: {filename}")
                     
                     # Send the enriched message to SQS for downstream processing
-                    # MODIFICATION: Pass the account email as the MessageGroupId
                     send_sqs_message(ct_session, sqs_queue_url, sqs_payload, message_group_id=account_email)
                     
                     # Provision the account via Service Catalog
@@ -127,12 +129,10 @@ def main():
                         sc_product_id,
                         sc_provisioning_artifact_id,
                         account_name,
-                        ct_params
+                        ct_params,
+                        sc_launch_path_id
                     )
                     
-                    # Here you might want to move or delete the processed .tf file
-                    # to prevent it from being processed again on the next run.
-                    # Example: os.remove(filepath)
 
                 except Exception as e:
                     logger.error(f"Error processing file {filepath}: {e}")
