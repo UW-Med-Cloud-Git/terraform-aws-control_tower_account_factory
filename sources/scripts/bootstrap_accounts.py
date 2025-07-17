@@ -68,6 +68,10 @@ def main():
     sts = aft_session.client("sts")
 
     try:
+        # Log the caller identity before assuming the role
+        caller_identity = sts.get_caller_identity()
+        logger.info(f"👤 Caller Identity: {caller_identity['Arn']}")
+
         # Assume the dedicated launch role in the Control Tower account
         logger.info(f"Assuming launch role {ct_launch_role_arn} in CT account...")
         assumed_role_object = sts.assume_role(
