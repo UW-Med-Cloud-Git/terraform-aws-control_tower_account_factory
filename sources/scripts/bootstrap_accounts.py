@@ -121,26 +121,17 @@ def main():
 
                     logger.debug(f"🔍 Raw HCL parse output from {filename}: {json.dumps(data, indent=2)}")
 
+                    # ✅ Correct parsing logic based on actual structure
                     request = {}
-                    for block in data:
-                        if "locals" in block:
-                            locals_block = block["locals"]
-                            logger.debug(f"🔍 Raw 'locals' block: {json.dumps(locals_block, indent=2)}")
+                    locals_block = data.get("locals", [])
 
-                            if isinstance(locals_block, list):
-                                for item in locals_block:
-                                    if isinstance(item, dict):
-                                        for key, value in item.items():
-                                            if key == "account_request" and isinstance(value, dict):
-                                                request = value
-                                                break
-                                    else:
-                                        logger.debug(f"⚠️ Skipping non-dict item in locals list: {item}")
-                            elif isinstance(locals_block, dict):
-                                request = locals_block.get("account_request", {})
-                            else:
-                                logger.warning(f"⚠️ Unexpected structure in 'locals' block: {locals_block}")
-                            break
+                    if isinstance(locals_block, list):
+                        for item in locals_block:
+                            if isinstance(item, dict) and "account_request" in item:
+                                request = item["account_request"]
+                                break
+                    else:
+                        logger.warning(f"⚠️ Unexpected 'locals' structure: {locals_block}")
 
                     if not request:
                         logger.warning(f"⚠️ No 'account_request' block found in {filename}. Skipping.")
