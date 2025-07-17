@@ -79,7 +79,7 @@ def main():
         credentials = assumed_role_object['Credentials']
 
         ct_session = boto3.Session(
-            aws_access_key_id=credentials["AccessKeyId"],
+            aws_access_key_id=credentials['AccessKeyId'],
             aws_secret_access_key=credentials['SecretAccessKey'],
             aws_session_token=credentials['SessionToken'],
             region_name=ct_management_region
@@ -101,6 +101,11 @@ def main():
             with open(filepath, "r") as f:
                 try:
                     data = hcl2.load(f)
+
+                    # Dump raw parse output to a file for inspection
+                    with open("parsed_output.json", "w") as debug_file:
+                        json.dump(data, debug_file, indent=2)
+
                     logger.debug(f"🔍 Raw HCL parse output from {filename}: {json.dumps(data, indent=2)}")
 
                     request = {}
