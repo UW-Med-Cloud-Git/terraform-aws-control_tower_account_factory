@@ -57,31 +57,27 @@ def main():
     sc_product_id = os.environ.get("SC_PRODUCT_ID")
     sc_provisioning_artifact_id = os.environ.get("SC_PROVISIONING_ARTIFACT_ID")
     sc_launch_path_id = os.environ.get("SC_LAUNCH_PATH_ID")
-    ct_launch_role_arn = os.environ.get("CT_LAUNCH_ROLE_ARN") # <-- NEW
+    ct_launch_role_arn = os.environ.get("CT_LAUNCH_ROLE_ARN")
 
     if not all([sqs_queue_url, sc_product_id, sc_provisioning_artifact_id, sc_launch_path_id, ct_launch_role_arn]):
         logger.error("Missing required environment variables, including CT_LAUNCH_ROLE_ARN")
         raise ValueError("Missing required environment variables.")
 
-    # Session in the AFT account, using credentials from the build environment
     aft_session = boto3.Session(region_name=ct_management_region)
     sts = aft_session.client("sts")
 
     try:
-        # Log the caller identity before assuming the role
         caller_identity = sts.get_caller_identity()
         logger.info(f"👤 Caller Identity: {caller_identity['Arn']}")
 
-        # Assume the dedicated launch role in the Control Tower account
         logger.info(f"Assuming launch role {ct_launch_role_arn} in CT account...")
         assumed_role_object = sts.assume_role(
             RoleArn=ct_launch_role_arn,
-            RoleSessionName="AFT-SC-Launch-Session"
+            RoleSessionName="AFT-SC-Launch-Session",
+            ExternalId="AWSAFT-Session"  # ✅ Added to satisfy trust policy
         )
         credentials = assumed_role_object['Credentials']
-        
-        # Create a new session using the assumed role's credentials
-        # This session will act within the CT account
+
         ct_session = boto3.Session(
             aws_access_key_id=credentials['AccessKeyId'],
             aws_secret_access_key=credentials['SecretAccessKey'],
@@ -96,12 +92,12 @@ def main():
 
     request_dir = "./account-requests/terraform"
     logger.info(f"🔍 Scanning directory: {request_dir}")
-    
+
     for filename in os.listdir(request_dir):
         if filename.endswith(".tf"):
             filepath = os.path.join(request_dir, filename)
             logger.info(f"📄 Found .tf file: {filepath}")
-            
+
             with open(filepath, "r") as f:
                 try:
                     data = hcl2.load(f)
@@ -125,16 +121,13 @@ def main():
                         "account_tags": account_tags,
                         "custom_fields": custom_fields
                     }
-                    
+
                     logger.info(f"✅ Preparing to send request from: {filename}")
-                    
-                    # Use the CT session to send the SQS message
                     send_sqs_message(ct_session, sqs_queue_url, sqs_payload, message_group_id=account_email)
-                    
+
                     account_name = ct_params["AccountName"]
                     logger.info(f"🔧 Calling provision_account for {account_name}")
-                    
-                    # Use the CT session to provision the account
+
                     provision_account(
                         ct_session,
                         sc_product_id,
