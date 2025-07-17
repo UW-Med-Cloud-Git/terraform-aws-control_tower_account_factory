@@ -101,10 +101,18 @@ def main():
             with open(filepath, "r") as f:
                 try:
                     data = hcl2.load(f)
+                    logger.debug(f"🔍 Raw HCL parse output from {filename}: {json.dumps(data, indent=2)}")
+
                     request = {}
                     for block in data:
                         if "locals" in block:
-                            request = block["locals"].get("account_request", {})
+                            locals_block = block["locals"]
+                            if isinstance(locals_block, list) and len(locals_block) > 0:
+                                request = locals_block[0].get("account_request", {})
+                            elif isinstance(locals_block, dict):
+                                request = locals_block.get("account_request", {})
+                            else:
+                                logger.warning(f"⚠️ Unexpected structure in 'locals' block: {locals_block}")
                             break
 
                     if not request:
