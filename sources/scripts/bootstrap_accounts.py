@@ -83,8 +83,11 @@ ProvisioningParameters=[
     {"Key": "AccountName", "Value": account_name},
     {"Key": "SSOUserEmail", "Value": email},
     {"Key": "AccountEmail", "Value": email},
-    {"Key": "ManagedOrganizationalUnit", "Value": ou}
+    {"Key": "ManagedOrganizationalUnit", "Value": ou},
+    {"Key": "FirstName", "Value": tags.get("SSOUserFirstName", "")},
+    {"Key": "LastName", "Value": tags.get("SSOUserLastName", "")}
 ]
+
 ,
             Tags=[{"Key": k, "Value": v} for k, v in tags.items()]
         )
