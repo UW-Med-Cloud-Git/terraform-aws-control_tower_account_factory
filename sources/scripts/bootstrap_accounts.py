@@ -49,6 +49,14 @@ def provision_account(session, product_id, provisioning_artifact_id, account_nam
         logger.error(f"❌ Failed to provision product for {account_name}: {e}")
         raise
 
+def upload_debug_artifact(file_path, bucket, key):
+    s3 = boto3.client("s3")
+    try:
+        s3.upload_file(file_path, bucket, key)
+        logger.info(f"✅ Uploaded {file_path} to s3://{bucket}/{key}")
+    except Exception as e:
+        logger.error(f"❌ Failed to upload debug artifact: {e}")
+
 def main():
     logger.info("🚀 bootstrap_accounts.py started")
 
@@ -58,6 +66,8 @@ def main():
     sc_provisioning_artifact_id = os.environ.get("SC_PROVISIONING_ARTIFACT_ID")
     sc_launch_path_id = os.environ.get("SC_LAUNCH_PATH_ID")
     ct_launch_role_arn = os.environ.get("CT_LAUNCH_ROLE_ARN")
+    debug_bucket = os.environ.get("DEBUG_ARTIFACT_BUCKET", "aft-debug-artifacts")
+    debug_key = os.environ.get("DEBUG_ARTIFACT_KEY", "parsed_output.json")
 
     if not all([sqs_queue_url, sc_product_id, sc_provisioning_artifact_id, sc_launch_path_id, ct_launch_role_arn]):
         logger.error("❌ Missing required environment variables, including CT_LAUNCH_ROLE_ARN")
@@ -102,9 +112,12 @@ def main():
                 try:
                     data = hcl2.load(f)
 
-                    # Dump raw parse output to a file for inspection
+                    # Dump raw parse output to a file
                     with open("parsed_output.json", "w") as debug_file:
                         json.dump(data, debug_file, indent=2)
+
+                    # Upload to S3 for inspection
+                    upload_debug_artifact("parsed_output.json", debug_bucket, debug_key)
 
                     logger.debug(f"🔍 Raw HCL parse output from {filename}: {json.dumps(data, indent=2)}")
 
