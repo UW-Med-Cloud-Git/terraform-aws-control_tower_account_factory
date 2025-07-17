@@ -114,6 +114,8 @@ def main():
                                     if isinstance(item, dict) and "account_request" in item:
                                         request = item["account_request"]
                                         break
+                                    else:
+                                        logger.debug(f"⚠️ Skipping non-dict item in locals list: {item}")
                             elif isinstance(locals_block, dict):
                                 request = locals_block.get("account_request", {})
                             else:
