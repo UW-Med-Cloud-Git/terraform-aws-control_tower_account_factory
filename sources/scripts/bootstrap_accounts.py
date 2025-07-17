@@ -107,8 +107,13 @@ def main():
                     for block in data:
                         if "locals" in block:
                             locals_block = block["locals"]
-                            if isinstance(locals_block, list) and len(locals_block) > 0:
-                                request = locals_block[0].get("account_request", {})
+                            logger.debug(f"🔍 Raw 'locals' block: {json.dumps(locals_block, indent=2)}")
+
+                            if isinstance(locals_block, list):
+                                for item in locals_block:
+                                    if isinstance(item, dict) and "account_request" in item:
+                                        request = item["account_request"]
+                                        break
                             elif isinstance(locals_block, dict):
                                 request = locals_block.get("account_request", {})
                             else:
