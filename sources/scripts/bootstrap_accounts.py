@@ -1,9 +1,5 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-#
-# This script is used to bootstrap AFT account requests.
-# It parses Terraform files, sends the request to an SQS queue,
-# and then provisions the account via AWS Service Catalog.
 
 import os
 import boto3
@@ -12,16 +8,10 @@ import json
 import logging
 from botocore.exceptions import ClientError
 
-# Setup logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-def get_session(region):
-    """Gets a boto3 session in the specified region."""
-    return boto3.Session(region_name=region)
-
 def send_sqs_message(session, queue_url, message_body, message_group_id):
-    """Sends a message to the specified SQS queue."""
     sqs = session.client("sqs")
     try:
         response = sqs.send_message(
@@ -35,16 +25,14 @@ def send_sqs_message(session, queue_url, message_body, message_group_id):
         logger.error(f"Failed to send message to SQS queue {queue_url}: {e}")
         raise
 
-# MODIFICATION: Added path_id parameter
 def provision_account(session, product_id, provisioning_artifact_id, account_name, ct_params, path_id):
-    """Provisions a new account using AWS Service Catalog."""
     sc = session.client("servicecatalog")
     try:
         logger.info(f"Attempting to provision product using PathId: {path_id}")
         response = sc.provision_product(
             ProductId=product_id,
             ProvisioningArtifactId=provisioning_artifact_id,
-            PathId=path_id,  # MODIFICATION: Use the specific launch path ID
+            PathId=path_id,
             ProvisionedProductName=account_name,
             ProvisioningParameters=[
                 {"Key": "AccountEmail", "Value": ct_params["AccountEmail"]},
@@ -64,24 +52,44 @@ def provision_account(session, product_id, provisioning_artifact_id, account_nam
 def main():
     logger.info("🚀 bootstrap_accounts.py started")
 
-    # Get environment variables
     ct_management_region = os.environ["CT_MGMT_REGION"]
-    
     sqs_queue_url = os.environ.get("SQS_QUEUE_URL")
     sc_product_id = os.environ.get("SC_PRODUCT_ID")
     sc_provisioning_artifact_id = os.environ.get("SC_PROVISIONING_ARTIFACT_ID")
-    # MODIFICATION: Get the Launch Path ID from an environment variable
     sc_launch_path_id = os.environ.get("SC_LAUNCH_PATH_ID")
+    ct_launch_role_arn = os.environ.get("CT_LAUNCH_ROLE_ARN") # <-- NEW
 
-    if not all([sqs_queue_url, sc_product_id, sc_provisioning_artifact_id, sc_launch_path_id]):
-        logger.error("Missing required environment variables: SQS_QUEUE_URL, SC_PRODUCT_ID, SC_PROVISIONING_ARTIFACT_ID, SC_LAUNCH_PATH_ID")
+    if not all([sqs_queue_url, sc_product_id, sc_provisioning_artifact_id, sc_launch_path_id, ct_launch_role_arn]):
+        logger.error("Missing required environment variables, including CT_LAUNCH_ROLE_ARN")
         raise ValueError("Missing required environment variables.")
 
+    # Session in the AFT account, using credentials from the build environment
+    aft_session = boto3.Session(region_name=ct_management_region)
+    sts = aft_session.client("sts")
 
-    logger.info(f"Creating Boto3 session in {ct_management_region} using credentials from the environment.")
-    ct_session = boto3.Session(region_name=ct_management_region)
+    try:
+        # Assume the dedicated launch role in the Control Tower account
+        logger.info(f"Assuming launch role {ct_launch_role_arn} in CT account...")
+        assumed_role_object = sts.assume_role(
+            RoleArn=ct_launch_role_arn,
+            RoleSessionName="AFT-SC-Launch-Session"
+        )
+        credentials = assumed_role_object['Credentials']
+        
+        # Create a new session using the assumed role's credentials
+        # This session will act within the CT account
+        ct_session = boto3.Session(
+            aws_access_key_id=credentials['AccessKeyId'],
+            aws_secret_access_key=credentials['SecretAccessKey'],
+            aws_session_token=credentials['SessionToken'],
+            region_name=ct_management_region
+        )
+        logger.info("✅ Successfully assumed launch role.")
 
-    # Scan for account request files
+    except ClientError as e:
+        logger.error(f"Failed to assume role {ct_launch_role_arn}: {e}")
+        raise
+
     request_dir = "./account-requests/terraform"
     logger.info(f"🔍 Scanning directory: {request_dir}")
     
@@ -99,7 +107,6 @@ def main():
                         logger.warning(f"No 'account_request' block found in {filename}. Skipping.")
                         continue
 
-                    # Extract all relevant sections from the request file
                     ct_params = request.get("control_tower_parameters", {})
                     account_tags = request.get("account_tags", {})
                     custom_fields = request.get("custom_fields", {})
@@ -109,7 +116,6 @@ def main():
                         logger.warning(f"Missing 'AccountEmail' in {filename}. Skipping.")
                         continue
 
-                    # Construct the full payload for the SQS message
                     sqs_payload = {
                         "control_tower_parameters": ct_params,
                         "account_tags": account_tags,
@@ -118,12 +124,13 @@ def main():
                     
                     logger.info(f"✅ Preparing to send request from: {filename}")
                     
-                    # Send the enriched message to SQS for downstream processing
+                    # Use the CT session to send the SQS message
                     send_sqs_message(ct_session, sqs_queue_url, sqs_payload, message_group_id=account_email)
                     
-                    # Provision the account via Service Catalog
                     account_name = ct_params["AccountName"]
                     logger.info(f"🔧 Calling provision_account for {account_name}")
+                    
+                    # Use the CT session to provision the account
                     provision_account(
                         ct_session,
                         sc_product_id,
@@ -132,8 +139,6 @@ def main():
                         ct_params,
                         sc_launch_path_id
                     )
-                    
-
                 except Exception as e:
                     logger.error(f"Error processing file {filepath}: {e}")
                     continue
