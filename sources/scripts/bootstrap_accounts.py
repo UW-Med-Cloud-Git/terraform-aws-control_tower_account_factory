@@ -1,174 +1,145 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# This script is used to bootstrap AFT account requests.
+# It parses Terraform files, sends the request to an SQS queue,
+# and then provisions the account via AWS Service Catalog.
+
 import os
-import json
-import uuid
 import boto3
 import hcl2
+import json
+import logging
+from botocore.exceptions import ClientError
 
-print("🚀 bootstrap_accounts.py started")
+# Setup logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
-# Configuration
-SQS_QUEUE_URL = "https://sqs.us-west-2.amazonaws.com/530256939043/aft-account-request.fifo"
-MESSAGE_GROUP_ID = "account-request"
-REGION = "us-west-2"
-DDB_TABLE_NAME = "aft-request"
+def get_session(region):
+    """Gets a boto3 session in the specified region."""
+    return boto3.Session(region_name=region)
 
-# 🔐 Replace with your actual Control Tower management account role ARN
-CT_ROLE_ARN = "arn:aws:iam::533267033612:role/AWSAFTService"
-
-# 🛠 Replace with your actual Account Factory product and artifact IDs
-PRODUCT_ID = "prod-xkelkuina4o6m"
-ARTIFACT_ID = "pa-r2duo7qrq4ya6"
-
-def extract_hcl_block(filepath):
-    """
-    Parses an HCL file and extracts the 'account_request' block from a 'locals' block.
-    """
+def send_sqs_message(session, queue_url, message_body):
+    """Sends a message to the specified SQS queue."""
+    sqs = session.client("sqs")
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            obj = hcl2.load(f)
-
-            if "locals" in obj:
-                locals_block = obj["locals"]
-
-                if isinstance(locals_block, list):
-                    for block in locals_block:
-                        if "account_request" in block:
-                            print(f"🔎 'account_request' found (list) in: {filepath}")
-                            return block["account_request"]
-
-                elif isinstance(locals_block, dict):
-                    if "account_request" in locals_block:
-                        print(f"🔎 'account_request' found (dict) in: {filepath}")
-                        return locals_block["account_request"]
-
-            print(f"⚠️ No 'account_request' block in: {filepath}")
-    except Exception as e:
-        print(f"❌ Error parsing {filepath}: {e}")
-    return None
-
-def write_to_dynamodb(ddb, request_data):
-    """
-    Writes the account request details to a DynamoDB table.
-    """
-    try:
-        email = request_data["control_tower_parameters"]["SSOUserEmail"]
-        item = {
-            "id": {"S": email},
-            "account_request": {"S": json.dumps(request_data)},
-            "operation": {"S": "ADD"}
-        }
-        print(f"📝 Writing to DynamoDB: {email}")
-        ddb.put_item(TableName=DDB_TABLE_NAME, Item=item)
-    except KeyError as e:
-        print(f"⚠️ Skipping DynamoDB write — missing key: {e}")
-
-def assume_ct_session():
-    """
-    Assumes the Control Tower management role to get temporary credentials.
-    """
-    sts = boto3.client("sts")
-    try:
-        response = sts.assume_role(
-            RoleArn=CT_ROLE_ARN,
-            RoleSessionName="AFTProvisioningSession"
+        response = sqs.send_message(
+            QueueUrl=queue_url,
+            MessageBody=json.dumps(message_body)
         )
-        creds = response["Credentials"]
-        print(f"🔐 Assumed CT session with access key: {creds['AccessKeyId']}")
-        return boto3.Session(
-            aws_access_key_id=creds["AccessKeyId"],
-            aws_secret_access_key=creds["SecretAccessKey"],
-            aws_session_token=creds["SessionToken"],
-            region_name=REGION
-        )
-    except Exception as e:
-        print(f"❌ Failed to assume role {CT_ROLE_ARN}. Error: {e}")
+        logger.info(f"SQS send_message response: {response}")
+        return response
+    except ClientError as e:
+        logger.error(f"Failed to send message to SQS queue {queue_url}: {e}")
         raise
 
-def provision_account(session, account_name, email, ou, tags, acct):
-    """
-    Provisions a new account using the AWS Service Catalog.
-    """
+def provision_account(session, product_id, provisioning_artifact_id, account_name, ct_params):
+    """Provisions a new account using AWS Service Catalog."""
     sc = session.client("servicecatalog")
     try:
-        # --- FIX: Get first and last name from the 'acct' dictionary ---
-        # The 'acct' dictionary holds all control_tower_parameters from the HCL file.
-        # We use .get() with a default value to make the script more robust.
-        first_name = acct.get("SSOUserFirstName", "AFTUser")
-        last_name = acct.get("SSOUserLastName", "AFTUser")
-
-        print(f"📦 Submitting provisioning request for {account_name} to Service Catalog")
         response = sc.provision_product(
-            ProductId=PRODUCT_ID,
-            ProvisioningArtifactId=ARTIFACT_ID,
+            ProductId=product_id,
+            ProvisioningArtifactId=provisioning_artifact_id,
             ProvisionedProductName=account_name,
             ProvisioningParameters=[
-                {"Key": "AccountName", "Value": account_name},
-                {"Key": "SSOUserEmail", "Value": email},
-                {"Key": "AccountEmail", "Value": email},
-                {"Key": "ManagedOrganizationalUnit", "Value": ou},
-                # --- FIX: Use the variables defined above from the 'acct' dict ---
-                {"Key": "SSOUserFirstName", "Value": first_name},
-                {"Key": "SSOUserLastName", "Value": last_name}
+                {"Key": "AccountEmail", "Value": ct_params["AccountEmail"]},
+                {"Key": "AccountName", "Value": ct_params["AccountName"]},
+                {"Key": "ManagedOrganizationalUnit", "Value": ct_params["ManagedOrganizationalUnit"]},
+                {"Key": "SSOUserEmail", "Value": ct_params["SSOUserEmail"]},
+                {"Key": "SSOUserFirstName", "Value": ct_params["SSOUserFirstName"]},
+                {"Key": "SSOUserLastName", "Value": ct_params["SSOUserLastName"]},
             ],
-            Tags=[{"Key": k, "Value": v} for k, v in tags.items()]
         )
-        record_id = response["RecordDetail"]["RecordId"]
-        print(f"🚀 Provisioning request submitted. Record ID: {record_id}")
-    except KeyError as e:
-        print(f"❌ Failed to provision account. A required key is missing from the HCL parameters: {e}")
-    except Exception as e:
-        print(f"❌ Failed to provision account: {e}")
+        logger.info(f"Service Catalog provision_product response: {response}")
+        return response
+    except ClientError as e:
+        logger.error(f"Failed to provision product for {account_name}: {e}")
+        raise
 
 def main():
-    """
-    Main function to scan for account requests and process them.
-    """
-    account_requests_root = "./account-requests/terraform"
-    print(f"🔍 Scanning directory: {account_requests_root}")
+    logger.info("🚀 bootstrap_accounts.py started")
 
-    sqs = boto3.client("sqs", region_name=REGION)
-    ddb = boto3.client("dynamodb", region_name=REGION)
-    ct_session = assume_ct_session()
+    # Get environment variables
+    ct_management_region = os.environ["CT_MGMT_REGION"]
+    aft_management_account_id = os.environ["AFT_MGMT_ACCOUNT"]
+    
+    sqs_queue_url = os.environ.get("SQS_QUEUE_URL")
+    sc_product_id = os.environ.get("SC_PRODUCT_ID")
+    sc_provisioning_artifact_id = os.environ.get("SC_PROVISIONING_ARTIFACT_ID")
 
-    for root, _, files in os.walk(account_requests_root):
-        for file in files:
-            if file.endswith(".tf"):
-                full_path = os.path.join(root, file)
-                print(f"📄 Found .tf file: {full_path}")
-                request_data = extract_hcl_block(full_path)
+    if not all([sqs_queue_url, sc_product_id, sc_provisioning_artifact_id]):
+        logger.error("Missing required environment variables: SQS_QUEUE_URL, SC_PRODUCT_ID, SC_PROVISIONING_ARTIFACT_ID")
+        raise ValueError("Missing required environment variables.")
 
-                if request_data and "control_tower_parameters" in request_data:
-                    message_body = {
-                        "operation": "ADD",
-                        "control_tower_parameters": request_data.get("control_tower_parameters"),
-                        "account_tags": request_data.get("account_tags", {}),
-                        "custom_fields": request_data.get("custom_fields", {})
+    sts = boto3.client("sts")
+    try:
+        ct_management_session_role = sts.assume_role(
+            RoleArn=f"arn:aws:iam::{aft_management_account_id}:role/AWSAFTAdmin",
+            RoleSessionName="AFT-Bootstrap-Session"
+        )
+        ct_session = boto3.Session(
+            aws_access_key_id=ct_management_session_role["Credentials"]["AccessKeyId"],
+            aws_secret_access_key=ct_management_session_role["Credentials"]["SecretAccessKey"],
+            aws_session_token=ct_management_session_role["Credentials"]["SessionToken"],
+            region_name=ct_management_region,
+        )
+        logger.info(f"🔐 Assumed CT session with access key: {ct_management_session_role['Credentials']['AccessKeyId'][-4:]}")
+    except ClientError as e:
+        logger.error(f"Failed to assume role: {e}")
+        raise
+
+    request_dir = "./account-requests/terraform"
+    logger.info(f"🔍 Scanning directory: {request_dir}")
+    
+    for filename in os.listdir(request_dir):
+        if filename.endswith(".tf"):
+            filepath = os.path.join(request_dir, filename)
+            logger.info(f"📄 Found .tf file: {filepath}")
+            
+            with open(filepath, "r") as f:
+                try:
+                    data = hcl2.load(f)
+                    request = data.get("locals", [{}])[0].get("account_request", {})
+
+                    if not request:
+                        logger.warning(f"No 'account_request' block found in {filename}. Skipping.")
+                        continue
+
+                    ct_params = request.get("control_tower_parameters", {})
+                    account_tags = request.get("account_tags", {})
+                    custom_fields = request.get("custom_fields", {}) # <-- NEW: Extract custom_fields
+
+                    if not ct_params.get("AccountEmail"):
+                        logger.warning(f"Missing 'AccountEmail' in {filename}. Skipping.")
+                        continue
+
+                    sqs_payload = {
+                        "control_tower_parameters": ct_params,
+                        "account_tags": account_tags,
+                        "custom_fields": custom_fields
                     }
-
-                    print(f"✅ Sending request from: {file}")
-                    response = sqs.send_message(
-                        QueueUrl=SQS_QUEUE_URL,
-                        MessageBody=json.dumps(message_body),
-                        MessageGroupId=MESSAGE_GROUP_ID,
-                        MessageDeduplicationId=str(uuid.uuid4())
-                    )
-                    print(f"📨 SQS response: {response}")
-
-                    write_to_dynamodb(ddb, message_body)
-
-                    acct = message_body["control_tower_parameters"]
-                    print(f"🔧 Calling provision_account for {acct['AccountName']}")
+                    
+                    logger.info(f"✅ Preparing to send request from: {filename}")
+                    
+                    send_sqs_message(ct_session, sqs_queue_url, sqs_payload)
+                    
+                    account_name = ct_params["AccountName"]
+                    logger.info(f"🔧 Calling provision_account for {account_name}")
                     provision_account(
                         ct_session,
-                        acct["AccountName"],
-                        acct["SSOUserEmail"],
-                        acct["ManagedOrganizationalUnit"],
-                        message_body.get("account_tags", {}),
-                        acct  # Pass the entire parameters dictionary
+                        sc_product_id,
+                        sc_provisioning_artifact_id,
+                        account_name,
+                        ct_params
                     )
-                else:
-                    print(f"⚠️ Skipping file: {file} — no valid 'account_request' block found.")
+                    
+
+                except Exception as e:
+                    logger.error(f"Error processing file {filepath}: {e}")
+                    continue
+
+    logger.info("✅ bootstrap_accounts.py completed")
 
 if __name__ == "__main__":
     main()
-    print("✅ bootstrap_accounts.py completed")
