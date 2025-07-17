@@ -10,9 +10,10 @@ MESSAGE_GROUP_ID = "account-request"
 REGION = "us-west-2"
 DDB_TABLE_NAME = "aft-request"
 
-
+# 🔐 Replace with your actual Control Tower management account role ARN
 CT_ROLE_ARN = "arn:aws:iam::533267033612:role/AWSAFTService"
 
+# 🛠 Replace with your actual Account Factory product and artifact IDs
 PRODUCT_ID = "prod-xkelkuina4o6m"
 ARTIFACT_ID = "pa-r2duo7qrq4ya6"
 
@@ -60,6 +61,7 @@ def assume_ct_session():
         RoleSessionName="AFTProvisioningSession"
     )
     creds = response["Credentials"]
+    print(f"🔐 Assumed CT session with access key: {creds['AccessKeyId']}")
     return boto3.Session(
         aws_access_key_id=creds["AccessKeyId"],
         aws_secret_access_key=creds["SecretAccessKey"],
@@ -69,8 +71,8 @@ def assume_ct_session():
 
 def provision_account(session, account_name, email, ou, tags):
     sc = session.client("servicecatalog")
-
     try:
+        print(f"📦 Submitting provisioning request for {account_name} to Service Catalog")
         response = sc.provision_product(
             ProductId=PRODUCT_ID,
             ProvisioningArtifactId=ARTIFACT_ID,
@@ -121,3 +123,18 @@ def main():
 
                     write_to_dynamodb(ddb, message_body)
 
+                    acct = message_body["control_tower_parameters"]
+                    print(f"🔧 Calling provision_account for {acct['AccountName']}")
+                    provision_account(
+                        ct_session,
+                        acct["AccountName"],
+                        acct["SSOUserEmail"],
+                        acct["ManagedOrganizationalUnit"],
+                        message_body.get("account_tags", {})
+                    )
+
+                else:
+                    print(f"⚠️ Skipping file: {file} — no valid request block found.")
+
+if __name__ == "__main__":
+    main()
