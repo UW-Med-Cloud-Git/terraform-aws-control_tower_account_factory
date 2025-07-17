@@ -62,7 +62,6 @@ def main():
 
     # Get environment variables
     ct_management_region = os.environ["CT_MGMT_REGION"]
-    aft_management_account_id = os.environ["AFT_MGMT_ACCOUNT"]
     
     sqs_queue_url = os.environ.get("SQS_QUEUE_URL")
     sc_product_id = os.environ.get("SC_PRODUCT_ID")
@@ -72,23 +71,12 @@ def main():
         logger.error("Missing required environment variables: SQS_QUEUE_URL, SC_PRODUCT_ID, SC_PROVISIONING_ARTIFACT_ID")
         raise ValueError("Missing required environment variables.")
 
-    sts = boto3.client("sts")
-    try:
-        ct_management_session_role = sts.assume_role(
-            RoleArn=f"arn:aws:iam::{aft_management_account_id}:role/AWSAFTAdmin",
-            RoleSessionName="AFT-Bootstrap-Session"
-        )
-        ct_session = boto3.Session(
-            aws_access_key_id=ct_management_session_role["Credentials"]["AccessKeyId"],
-            aws_secret_access_key=ct_management_session_role["Credentials"]["SecretAccessKey"],
-            aws_session_token=ct_management_session_role["Credentials"]["SessionToken"],
-            region_name=ct_management_region,
-        )
-        logger.info(f"🔐 Assumed CT session with access key: {ct_management_session_role['Credentials']['AccessKeyId'][-4:]}")
-    except ClientError as e:
-        logger.error(f"Failed to assume role: {e}")
-        raise
+    # The buildspec already assumes the correct role.
+    # Boto3 will automatically use the credentials from the environment variables.
+    logger.info(f"Creating Boto3 session in {ct_management_region} using credentials from the environment.")
+    ct_session = boto3.Session(region_name=ct_management_region)
 
+    # Scan for account request files
     request_dir = "./account-requests/terraform"
     logger.info(f"🔍 Scanning directory: {request_dir}")
     
@@ -106,14 +94,16 @@ def main():
                         logger.warning(f"No 'account_request' block found in {filename}. Skipping.")
                         continue
 
+                    # Extract all relevant sections from the request file
                     ct_params = request.get("control_tower_parameters", {})
                     account_tags = request.get("account_tags", {})
-                    custom_fields = request.get("custom_fields", {}) # <-- NEW: Extract custom_fields
+                    custom_fields = request.get("custom_fields", {})
 
                     if not ct_params.get("AccountEmail"):
                         logger.warning(f"Missing 'AccountEmail' in {filename}. Skipping.")
                         continue
 
+                    # Construct the full payload for the SQS message
                     sqs_payload = {
                         "control_tower_parameters": ct_params,
                         "account_tags": account_tags,
@@ -122,8 +112,10 @@ def main():
                     
                     logger.info(f"✅ Preparing to send request from: {filename}")
                     
+                    # Send the enriched message to SQS for downstream processing
                     send_sqs_message(ct_session, sqs_queue_url, sqs_payload)
                     
+                    # Provision the account via Service Catalog
                     account_name = ct_params["AccountName"]
                     logger.info(f"🔧 Calling provision_account for {account_name}")
                     provision_account(
@@ -134,6 +126,9 @@ def main():
                         ct_params
                     )
                     
+                    # Here you might want to move or delete the processed .tf file
+                    # to prevent it from being processed again on the next run.
+                    # Example: os.remove(filepath)
 
                 except Exception as e:
                     logger.error(f"Error processing file {filepath}: {e}")
