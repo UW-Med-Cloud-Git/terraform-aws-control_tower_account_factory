@@ -4,6 +4,8 @@ import uuid
 import boto3
 import hcl2
 
+print("🚀 bootstrap_accounts.py started")
+
 # Configuration
 SQS_QUEUE_URL = "https://sqs.us-west-2.amazonaws.com/530256939043/aft-account-request.fifo"
 MESSAGE_GROUP_ID = "account-request"
@@ -135,6 +137,8 @@ def main():
 
                 else:
                     print(f"⚠️ Skipping file: {file} — no valid request block found.")
+
+print("✅ bootstrap_accounts.py completed")
 
 if __name__ == "__main__":
     main()
