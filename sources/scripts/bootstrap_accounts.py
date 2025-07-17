@@ -20,13 +20,15 @@ def get_session(region):
     """Gets a boto3 session in the specified region."""
     return boto3.Session(region_name=region)
 
-def send_sqs_message(session, queue_url, message_body):
+def send_sqs_message(session, queue_url, message_body, message_group_id):
     """Sends a message to the specified SQS queue."""
     sqs = session.client("sqs")
     try:
+        # MODIFICATION: Added MessageGroupId for FIFO queues
         response = sqs.send_message(
             QueueUrl=queue_url,
-            MessageBody=json.dumps(message_body)
+            MessageBody=json.dumps(message_body),
+            MessageGroupId=message_group_id
         )
         logger.info(f"SQS send_message response: {response}")
         return response
@@ -98,8 +100,9 @@ def main():
                     ct_params = request.get("control_tower_parameters", {})
                     account_tags = request.get("account_tags", {})
                     custom_fields = request.get("custom_fields", {})
+                    account_email = ct_params.get("AccountEmail")
 
-                    if not ct_params.get("AccountEmail"):
+                    if not account_email:
                         logger.warning(f"Missing 'AccountEmail' in {filename}. Skipping.")
                         continue
 
@@ -113,7 +116,8 @@ def main():
                     logger.info(f"✅ Preparing to send request from: {filename}")
                     
                     # Send the enriched message to SQS for downstream processing
-                    send_sqs_message(ct_session, sqs_queue_url, sqs_payload)
+                    # MODIFICATION: Pass the account email as the MessageGroupId
+                    send_sqs_message(ct_session, sqs_queue_url, sqs_payload, message_group_id=account_email)
                     
                     # Provision the account via Service Catalog
                     account_name = ct_params["AccountName"]
