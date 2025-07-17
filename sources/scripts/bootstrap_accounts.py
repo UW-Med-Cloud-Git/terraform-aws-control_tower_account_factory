@@ -10,6 +10,12 @@ MESSAGE_GROUP_ID = "account-request"
 REGION = "us-west-2"
 DDB_TABLE_NAME = "aft-request"
 
+
+CT_ROLE_ARN = "arn:aws:iam::533267033612:role/AWSAFTService"
+
+PRODUCT_ID = "prod-xkelkuina4o6m"
+ARTIFACT_ID = "pa-r2duo7qrq4ya6"
+
 def extract_hcl_block(filepath):
     try:
         with open(filepath, "r") as f:
@@ -35,17 +41,51 @@ def extract_hcl_block(filepath):
     return None
 
 def write_to_dynamodb(ddb, request_data):
-    email = request_data["control_tower_parameters"]["SSOUserEmail"]
-    item = {
-        "id": {"S": email},
-        "account_request": {"S": json.dumps(request_data)},
-        "operation": {"S": "ADD"}
-    }
     try:
+        email = request_data["control_tower_parameters"]["SSOUserEmail"]
+        item = {
+            "id": {"S": email},
+            "account_request": {"S": json.dumps(request_data)},
+            "operation": {"S": "ADD"}
+        }
         print(f"📝 Writing to DynamoDB: {email}")
         ddb.put_item(TableName=DDB_TABLE_NAME, Item=item)
     except KeyError as e:
         print(f"⚠️ Skipping DynamoDB write — missing key: {e}")
+
+def assume_ct_session():
+    sts = boto3.client("sts")
+    response = sts.assume_role(
+        RoleArn=CT_ROLE_ARN,
+        RoleSessionName="AFTProvisioningSession"
+    )
+    creds = response["Credentials"]
+    return boto3.Session(
+        aws_access_key_id=creds["AccessKeyId"],
+        aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"],
+        region_name=REGION
+    )
+
+def provision_account(session, account_name, email, ou, tags):
+    sc = session.client("servicecatalog")
+
+    try:
+        response = sc.provision_product(
+            ProductId=PRODUCT_ID,
+            ProvisioningArtifactId=ARTIFACT_ID,
+            ProvisionedProductName=account_name,
+            ProvisioningParameters=[
+                {"Key": "AccountName", "Value": account_name},
+                {"Key": "SSOUserEmail", "Value": email},
+                {"Key": "ManagedOrganizationalUnit", "Value": ou}
+            ],
+            Tags=[{"Key": k, "Value": v} for k, v in tags.items()]
+        )
+        record_id = response["RecordDetail"]["RecordId"]
+        print(f"🚀 Provisioning request submitted: {record_id}")
+    except Exception as e:
+        print(f"❌ Failed to provision account: {e}")
 
 def main():
     account_requests_root = "./account-requests/terraform"
@@ -53,6 +93,7 @@ def main():
 
     sqs = boto3.client("sqs", region_name=REGION)
     ddb = boto3.client("dynamodb", region_name=REGION)
+    ct_session = assume_ct_session()
 
     for root, _, files in os.walk(account_requests_root):
         for file in files:
@@ -80,8 +121,3 @@ def main():
 
                     write_to_dynamodb(ddb, message_body)
 
-                else:
-                    print(f"⚠️ Skipping file: {file} — no valid request block found.")
-
-if __name__ == "__main__":
-    main()
