@@ -19,16 +19,16 @@ def send_sqs_message(session, queue_url, message_body, message_group_id):
             MessageBody=json.dumps(message_body),
             MessageGroupId=message_group_id
         )
-        logger.info(f"SQS send_message response: {response}")
+        logger.info(f"📨 SQS send_message response: {response}")
         return response
     except ClientError as e:
-        logger.error(f"Failed to send message to SQS queue {queue_url}: {e}")
+        logger.error(f"❌ Failed to send message to SQS queue {queue_url}: {e}")
         raise
 
 def provision_account(session, product_id, provisioning_artifact_id, account_name, ct_params, path_id):
     sc = session.client("servicecatalog")
     try:
-        logger.info(f"Attempting to provision product using PathId: {path_id}")
+        logger.info(f"🔧 Attempting to provision product using PathId: {path_id}")
         response = sc.provision_product(
             ProductId=product_id,
             ProvisioningArtifactId=provisioning_artifact_id,
@@ -43,10 +43,10 @@ def provision_account(session, product_id, provisioning_artifact_id, account_nam
                 {"Key": "SSOUserLastName", "Value": ct_params["SSOUserLastName"]},
             ],
         )
-        logger.info(f"Service Catalog provision_product response: {response}")
+        logger.info(f"✅ Service Catalog provision_product response: {response}")
         return response
     except ClientError as e:
-        logger.error(f"Failed to provision product for {account_name}: {e}")
+        logger.error(f"❌ Failed to provision product for {account_name}: {e}")
         raise
 
 def main():
@@ -60,7 +60,7 @@ def main():
     ct_launch_role_arn = os.environ.get("CT_LAUNCH_ROLE_ARN")
 
     if not all([sqs_queue_url, sc_product_id, sc_provisioning_artifact_id, sc_launch_path_id, ct_launch_role_arn]):
-        logger.error("Missing required environment variables, including CT_LAUNCH_ROLE_ARN")
+        logger.error("❌ Missing required environment variables, including CT_LAUNCH_ROLE_ARN")
         raise ValueError("Missing required environment variables.")
 
     aft_session = boto3.Session(region_name=ct_management_region)
@@ -70,11 +70,11 @@ def main():
         caller_identity = sts.get_caller_identity()
         logger.info(f"👤 Caller Identity: {caller_identity['Arn']}")
 
-        logger.info(f"Assuming launch role {ct_launch_role_arn} in CT account...")
+        logger.info(f"🔐 Assuming launch role {ct_launch_role_arn} in CT account...")
         assumed_role_object = sts.assume_role(
             RoleArn=ct_launch_role_arn,
             RoleSessionName="AFT-SC-Launch-Session",
-            ExternalId="AWSAFT-Session"  # ✅ Added to satisfy trust policy
+            ExternalId="AWSAFT-Session"
         )
         credentials = assumed_role_object['Credentials']
 
@@ -87,7 +87,7 @@ def main():
         logger.info("✅ Successfully assumed launch role.")
 
     except ClientError as e:
-        logger.error(f"Failed to assume role {ct_launch_role_arn}: {e}")
+        logger.error(f"❌ Failed to assume role {ct_launch_role_arn}: {e}")
         raise
 
     request_dir = "./account-requests/terraform"
@@ -101,11 +101,17 @@ def main():
             with open(filepath, "r") as f:
                 try:
                     data = hcl2.load(f)
-                    request = data.get("locals", [{}])[0].get("account_request", {})
+                    request = {}
+                    for block in data:
+                        if "locals" in block:
+                            request = block["locals"].get("account_request", {})
+                            break
 
                     if not request:
-                        logger.warning(f"No 'account_request' block found in {filename}. Skipping.")
+                        logger.warning(f"⚠️ No 'account_request' block found in {filename}. Skipping.")
                         continue
+
+                    logger.info(f"📦 Parsed account_request from {filename}: {json.dumps(request, indent=2)}")
 
                     ct_params = request.get("control_tower_parameters", {})
                     account_tags = request.get("account_tags", {})
@@ -113,7 +119,7 @@ def main():
                     account_email = ct_params.get("AccountEmail")
 
                     if not account_email:
-                        logger.warning(f"Missing 'AccountEmail' in {filename}. Skipping.")
+                        logger.warning(f"⚠️ Missing 'AccountEmail' in {filename}. Skipping.")
                         continue
 
                     sqs_payload = {
@@ -122,11 +128,11 @@ def main():
                         "custom_fields": custom_fields
                     }
 
-                    logger.info(f"✅ Preparing to send request from: {filename}")
+                    logger.info(f"📨 Preparing to send request from: {filename}")
                     send_sqs_message(ct_session, sqs_queue_url, sqs_payload, message_group_id=account_email)
 
                     account_name = ct_params["AccountName"]
-                    logger.info(f"🔧 Calling provision_account for {account_name}")
+                    logger.info(f"🚀 Calling provision_account for {account_name}")
 
                     provision_account(
                         ct_session,
@@ -137,7 +143,7 @@ def main():
                         sc_launch_path_id
                     )
                 except Exception as e:
-                    logger.error(f"Error processing file {filepath}: {e}")
+                    logger.error(f"❌ Error processing file {filepath}: {e}")
                     continue
 
     logger.info("✅ bootstrap_accounts.py completed")
