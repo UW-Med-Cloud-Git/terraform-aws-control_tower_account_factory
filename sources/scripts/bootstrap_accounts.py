@@ -83,7 +83,7 @@ def provision_account(session, account_name, email, ou, tags):
                 {"Key": "AccountName", "Value": account_name},
                 {"Key": "SSOUserEmail", "Value": email},
                 {"Key": "ManagedOrganizationalUnit", "Value": ou},
-                {"Key": "AccountEmail", "Value": email}
+                {"Key": "accountemail", "Value": email}
             ],
             Tags=[{"Key": k, "Value": v} for k, v in tags.items()]
         )
