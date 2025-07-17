@@ -79,12 +79,13 @@ def provision_account(session, account_name, email, ou, tags):
             ProductId=PRODUCT_ID,
             ProvisioningArtifactId=ARTIFACT_ID,
             ProvisionedProductName=account_name,
-            ProvisioningParameters=[
-                {"Key": "AccountName", "Value": account_name},
-                {"Key": "SSOUserEmail", "Value": email},
-                {"Key": "ManagedOrganizationalUnit", "Value": ou},
-                {"Key": "accountemail", "Value": email}
-            ],
+ProvisioningParameters=[
+    {"Key": "AccountName", "Value": account_name},
+    {"Key": "SSOUserEmail", "Value": email},
+    {"Key": "AccountEmail", "Value": email},
+    {"Key": "ManagedOrganizationalUnit", "Value": ou}
+]
+,
             Tags=[{"Key": k, "Value": v} for k, v in tags.items()]
         )
         record_id = response["RecordDetail"]["RecordId"]
