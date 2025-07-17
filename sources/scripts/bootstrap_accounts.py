@@ -79,7 +79,7 @@ def main():
         credentials = assumed_role_object['Credentials']
 
         ct_session = boto3.Session(
-            aws_access_key_id=credentials['AccessKeyId"],
+            aws_access_key_id=credentials["AccessKeyId"],
             aws_secret_access_key=credentials['SecretAccessKey'],
             aws_session_token=credentials['SessionToken'],
             region_name=ct_management_region
