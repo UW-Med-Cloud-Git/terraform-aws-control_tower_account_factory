@@ -77,8 +77,8 @@ def provision_account(session, account_name, email, ou, tags, acct):
         first_name = acct.get("SSOUserFirstName", "").strip()
         last_name = acct.get("SSOUserLastName", "").strip()
 
-        print(f"🧪 firstName raw value: {repr(first_name)}")
-        print(f"🧪 lastName raw value: {repr(last_name)}")
+        print(f"🧪 SSOUserFirstName raw value: {repr(first_name)}")
+        print(f"🧪 SSOUserLastName raw value: {repr(last_name)}")
 
         if not first_name or not last_name:
             raise ValueError("Missing required SSO user name fields")
@@ -90,8 +90,8 @@ def provision_account(session, account_name, email, ou, tags, acct):
             {"Key": "SSOUserEmail", "Value": email},
             {"Key": "AccountEmail", "Value": email},
             {"Key": "ManagedOrganizationalUnit", "Value": ou},
-            {"Key": "firstName", "Value": first_name},
-            {"Key": "lastName", "Value": last_name}
+            {"Key": "SSOUserFirstName", "Value": first_name},
+            {"Key": "SSOUserLastName", "Value": last_name}
         ]
 
         print("📋 Provisioning parameters:")
