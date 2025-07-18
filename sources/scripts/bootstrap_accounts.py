@@ -1,178 +1,156 @@
-# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 import os
+import json
+import uuid
 import boto3
 import hcl2
-import json
-import logging
-from botocore.exceptions import ClientError
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+print("🚀 bootstrap_accounts.py started")
 
-def send_sqs_message(session, queue_url, message_body, message_group_id):
-    sqs = session.client("sqs")
+# Configuration
+SQS_QUEUE_URL = "https://sqs.us-west-2.amazonaws.com/530256939043/aft-account-request.fifo"
+MESSAGE_GROUP_ID = "account-request"
+REGION = "us-west-2"
+DDB_TABLE_NAME = "aft-request"
+
+CT_ROLE_ARN = "arn:aws:iam::533267033612:role/AWSAFTService"
+PRODUCT_ID = "prod-xkelkuina4o6m"
+ARTIFACT_ID = "pa-r2duo7qrq4ya6"
+
+def extract_hcl_block(filepath):
     try:
-        response = sqs.send_message(
-            QueueUrl=queue_url,
-            MessageBody=json.dumps(message_body),
-            MessageGroupId=message_group_id
-        )
-        logger.info(f"📨 SQS send_message response: {response}")
-        return response
-    except ClientError as e:
-        logger.error(f"❌ Failed to send message to SQS queue {queue_url}: {e}")
-        raise
+        with open(filepath, "r") as f:
+            obj = hcl2.load(f)
 
-def provision_account(session, product_id, provisioning_artifact_id, account_name, ct_params, path_id):
+            if "locals" in obj:
+                locals_block = obj["locals"]
+
+                if isinstance(locals_block, list):
+                    for block in locals_block:
+                        if "account_request" in block:
+                            print(f"🔎 'account_request' found (list) in: {filepath}")
+                            print(f"🧪 Extracted block: {json.dumps(block['account_request'], indent=2)}")
+                            return block["account_request"]
+
+                elif isinstance(locals_block, dict):
+                    if "account_request" in locals_block:
+                        print(f"🔎 'account_request' found (dict) in: {filepath}")
+                        print(f"🧪 Extracted block: {json.dumps(locals_block['account_request'], indent=2)}")
+                        return locals_block["account_request"]
+
+            print(f"⚠️ No 'account_request' block in: {filepath}")
+    except Exception as e:
+        print(f"❌ Error parsing {filepath}: {e}")
+    return None
+
+def write_to_dynamodb(ddb, request_data):
+    try:
+        email = request_data["control_tower_parameters"]["SSOUserEmail"]
+        item = {
+            "id": {"S": email},
+            "account_request": {"S": json.dumps(request_data)},
+            "operation": {"S": "ADD"}
+        }
+        print(f"📝 Writing to DynamoDB: {email}")
+        ddb.put_item(TableName=DDB_TABLE_NAME, Item=item)
+    except KeyError as e:
+        print(f"⚠️ Skipping DynamoDB write — missing key: {e}")
+
+def assume_ct_session():
+    sts = boto3.client("sts")
+    response = sts.assume_role(
+        RoleArn=CT_ROLE_ARN,
+        RoleSessionName="AFTProvisioningSession"
+    )
+    creds = response["Credentials"]
+    print(f"🔐 Assumed CT session with access key: {creds['AccessKeyId']}")
+    return boto3.Session(
+        aws_access_key_id=creds["AccessKeyId"],
+        aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"],
+        region_name=REGION
+    )
+
+def provision_account(session, account_name, email, ou, tags, acct):
     sc = session.client("servicecatalog")
     try:
-        logger.info(f"🔧 Attempting to provision product using PathId: {path_id}")
-        response = sc.provision_product(
-            ProductId=product_id,
-            ProvisioningArtifactId=provisioning_artifact_id,
-            PathId=path_id,
-            ProvisionedProductName=account_name,
-            ProvisioningParameters=[
-                {"Key": "AccountEmail", "Value": ct_params["AccountEmail"]},
-                {"Key": "AccountName", "Value": ct_params["AccountName"]},
-                {"Key": "ManagedOrganizationalUnit", "Value": ct_params["ManagedOrganizationalUnit"]},
-                {"Key": "SSOUserEmail", "Value": ct_params["SSOUserEmail"]},
-                {"Key": "SSOUserFirstName", "Value": ct_params["SSOUserFirstName"]},
-                {"Key": "SSOUserLastName", "Value": ct_params["SSOUserLastName"]},
-            ],
-        )
-        logger.info(f"✅ Service Catalog provision_product response: {response}")
-        return response
-    except ClientError as e:
-        logger.error(f"❌ Failed to provision product for {account_name}: {e}")
-        raise
+        print(f"📦 Submitting provisioning request for {account_name} to Service Catalog")
+        provisioning_parameters = [
+            {"Key": "AccountName", "Value": account_name},
+            {"Key": "SSOUserEmail", "Value": email},
+            {"Key": "AccountEmail", "Value": email},
+            {"Key": "ManagedOrganizationalUnit", "Value": ou},
+            {"Key": "firstName", "Value": acct["SSOUserFirstName"]},
+            {"Key": "lastName", "Value": acct["SSOUserLastName"]}
+        ]
 
-def upload_debug_artifact(file_path, bucket, key):
-    s3 = boto3.client("s3")
-    try:
-        s3.upload_file(file_path, bucket, key)
-        logger.info(f"✅ Uploaded {file_path} to s3://{bucket}/{key}")
+        print("📋 Provisioning parameters:")
+        for param in provisioning_parameters:
+            print(f"  - {param['Key']}: {param['Value']}")
+
+        response = sc.provision_product(
+            ProductId=PRODUCT_ID,
+            ProvisioningArtifactId=ARTIFACT_ID,
+            ProvisionedProductName=account_name,
+            ProvisioningParameters=provisioning_parameters,
+            Tags=[{"Key": k, "Value": v} for k, v in tags.items()]
+        )
+        record_id = response["RecordDetail"]["RecordId"]
+        print(f"🚀 Provisioning request submitted: {record_id}")
     except Exception as e:
-        logger.error(f"❌ Failed to upload debug artifact: {e}")
+        print(f"❌ Failed to provision account: {e}")
 
 def main():
-    logger.info("🚀 bootstrap_accounts.py started")
+    account_requests_root = "./account-requests/terraform"
+    print(f"🔍 Scanning directory: {account_requests_root}")
 
-    ct_management_region = os.environ["CT_MGMT_REGION"]
-    sqs_queue_url = os.environ.get("SQS_QUEUE_URL")
-    sc_product_id = os.environ.get("SC_PRODUCT_ID")
-    sc_provisioning_artifact_id = os.environ.get("SC_PROVISIONING_ARTIFACT_ID")
-    sc_launch_path_id = os.environ.get("SC_LAUNCH_PATH_ID")
-    ct_launch_role_arn = os.environ.get("CT_LAUNCH_ROLE_ARN")
-    debug_bucket = os.environ.get("DEBUG_ARTIFACT_BUCKET", "aft-debug-artifacts")
-    debug_key = os.environ.get("DEBUG_ARTIFACT_KEY", "parsed_output.json")
+    sqs = boto3.client("sqs", region_name=REGION)
+    ddb = boto3.client("dynamodb", region_name=REGION)
+    ct_session = assume_ct_session()
 
-    if not all([sqs_queue_url, sc_product_id, sc_provisioning_artifact_id, sc_launch_path_id, ct_launch_role_arn]):
-        logger.error("❌ Missing required environment variables, including CT_LAUNCH_ROLE_ARN")
-        raise ValueError("Missing required environment variables.")
+    for root, _, files in os.walk(account_requests_root):
+        print(f"📁 Walking through: {root}")
+        print(f"📂 Files found: {files}")
 
-    aft_session = boto3.Session(region_name=ct_management_region)
-    sts = aft_session.client("sts")
+        for file in files:
+            if file.endswith(".tf"):
+                full_path = os.path.join(root, file)
+                print(f"📄 Found .tf file: {full_path}")
+                request_data = extract_hcl_block(full_path)
 
-    try:
-        caller_identity = sts.get_caller_identity()
-        logger.info(f"👤 Caller Identity: {caller_identity['Arn']}")
-
-        logger.info(f"🔐 Assuming launch role {ct_launch_role_arn} in CT account...")
-        assumed_role_object = sts.assume_role(
-            RoleArn=ct_launch_role_arn,
-            RoleSessionName="AFT-SC-Launch-Session",
-            ExternalId="AWSAFT-Session"
-        )
-        credentials = assumed_role_object['Credentials']
-
-        ct_session = boto3.Session(
-            aws_access_key_id=credentials['AccessKeyId'],
-            aws_secret_access_key=credentials['SecretAccessKey'],
-            aws_session_token=credentials['SessionToken'],
-            region_name=ct_management_region
-        )
-        logger.info("✅ Successfully assumed launch role.")
-
-    except ClientError as e:
-        logger.error(f"❌ Failed to assume role {ct_launch_role_arn}: {e}")
-        raise
-
-    request_dir = "./account-requests/terraform"
-    logger.info(f"🔍 Scanning directory: {request_dir}")
-
-    for filename in os.listdir(request_dir):
-        if filename.endswith(".tf"):
-            filepath = os.path.join(request_dir, filename)
-            logger.info(f"📄 Found .tf file: {filepath}")
-
-            with open(filepath, "r") as f:
-                try:
-                    data = hcl2.load(f)
-
-                    # Dump raw parse output to a file
-                    with open("parsed_output.json", "w") as debug_file:
-                        json.dump(data, debug_file, indent=2)
-
-                    # Upload to S3 for inspection
-                    upload_debug_artifact("parsed_output.json", debug_bucket, debug_key)
-
-                    logger.debug(f"🔍 Raw HCL parse output from {filename}: {json.dumps(data, indent=2)}")
-
-                    # ✅ Correct parsing logic based on actual structure
-                    request = {}
-                    locals_block = data.get("locals", [])
-
-                    if isinstance(locals_block, list):
-                        for item in locals_block:
-                            if isinstance(item, dict) and "account_request" in item:
-                                request = item["account_request"]
-                                break
-                    else:
-                        logger.warning(f"⚠️ Unexpected 'locals' structure: {locals_block}")
-
-                    if not request:
-                        logger.warning(f"⚠️ No 'account_request' block found in {filename}. Skipping.")
-                        continue
-
-                    logger.info(f"📦 Parsed account_request from {filename}: {json.dumps(request, indent=2)}")
-
-                    ct_params = request.get("control_tower_parameters", {})
-                    account_tags = request.get("account_tags", {})
-                    custom_fields = request.get("custom_fields", {})
-                    account_email = ct_params.get("AccountEmail")
-
-                    if not account_email:
-                        logger.warning(f"⚠️ Missing 'AccountEmail' in {filename}. Skipping.")
-                        continue
-
-                    sqs_payload = {
-                        "control_tower_parameters": ct_params,
-                        "account_tags": account_tags,
-                        "custom_fields": custom_fields
+                if request_data and "control_tower_parameters" in request_data:
+                    message_body = {
+                        "operation": "ADD",
+                        "control_tower_parameters": request_data.get("control_tower_parameters"),
+                        "account_tags": request_data.get("account_tags", {}),
+                        "custom_fields": request_data.get("custom_fields", {})
                     }
 
-                    logger.info(f"📨 Preparing to send request from: {filename}")
-                    send_sqs_message(ct_session, sqs_queue_url, sqs_payload, message_group_id=account_email)
+                    print(f"✅ Sending request from: {file}")
+                    response = sqs.send_message(
+                        QueueUrl=SQS_QUEUE_URL,
+                        MessageBody=json.dumps(message_body),
+                        MessageGroupId=MESSAGE_GROUP_ID,
+                        MessageDeduplicationId=str(uuid.uuid4())
+                    )
+                    print(f"📨 SQS response: {response}")
 
-                    account_name = ct_params["AccountName"]
-                    logger.info(f"🚀 Calling provision_account for {account_name}")
+                    write_to_dynamodb(ddb, message_body)
 
+                    acct = message_body["control_tower_parameters"]
+                    print(f"🔧 Calling provision_account for {acct['AccountName']}")
                     provision_account(
                         ct_session,
-                        sc_product_id,
-                        sc_provisioning_artifact_id,
-                        account_name,
-                        ct_params,
-                        sc_launch_path_id
+                        acct["AccountName"],
+                        acct["SSOUserEmail"],
+                        acct["ManagedOrganizationalUnit"],
+                        message_body.get("account_tags", {}),
+                        acct
                     )
-                except Exception as e:
-                    logger.error(f"❌ Error processing file {filepath}: {e}")
-                    continue
 
-    logger.info("✅ bootstrap_accounts.py completed")
+                else:
+                    print(f"⚠️ Skipping file: {file} — no valid request block found.")
+
+    print("✅ bootstrap_accounts.py completed")
 
 if __name__ == "__main__":
     main()
