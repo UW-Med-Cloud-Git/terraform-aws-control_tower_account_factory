@@ -73,14 +73,25 @@ def assume_ct_session():
 def provision_account(session, account_name, email, ou, tags, acct):
     sc = session.client("servicecatalog")
     try:
+        # Extract and validate names
+        first_name = acct.get("SSOUserFirstName", "").strip()
+        last_name = acct.get("SSOUserLastName", "").strip()
+
+        print(f"🧪 firstName raw value: {repr(first_name)}")
+        print(f"🧪 lastName raw value: {repr(last_name)}")
+
+        if not first_name or not last_name:
+            raise ValueError("Missing required SSO user name fields")
+
         print(f"📦 Submitting provisioning request for {account_name} to Service Catalog")
+
         provisioning_parameters = [
             {"Key": "AccountName", "Value": account_name},
             {"Key": "SSOUserEmail", "Value": email},
             {"Key": "AccountEmail", "Value": email},
             {"Key": "ManagedOrganizationalUnit", "Value": ou},
-            {"Key": "firstName", "Value": acct["SSOUserFirstName"]},
-            {"Key": "lastName", "Value": acct["SSOUserLastName"]}
+            {"Key": "firstName", "Value": first_name},
+            {"Key": "lastName", "Value": last_name}
         ]
 
         print("📋 Provisioning parameters:")
