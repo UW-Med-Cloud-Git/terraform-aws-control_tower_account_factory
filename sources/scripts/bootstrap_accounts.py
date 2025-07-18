@@ -1,6 +1,3 @@
-# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 import os
 import boto3
 import hcl2
@@ -29,8 +26,9 @@ def provision_account(session, product_id, provisioning_artifact_id, account_nam
     sc = session.client("servicecatalog")
     try:
         logger.info(f"Attempting to provision product using PathId: {path_id}")
-        
-        # MODIFICATION: Use the correct parameter keys expected by Service Catalog
+
+        # MODIFICATION: Correctly map firstName/lastName from the .tf file to the
+        # parameter names expected by the Service Catalog product.
         response = sc.provision_product(
             ProductId=product_id,
             ProvisioningArtifactId=provisioning_artifact_id,
@@ -41,12 +39,16 @@ def provision_account(session, product_id, provisioning_artifact_id, account_nam
                 {"Key": "AccountName", "Value": ct_params["AccountName"]},
                 {"Key": "ManagedOrganizationalUnit", "Value": ct_params["ManagedOrganizationalUnit"]},
                 {"Key": "SSOUserEmail", "Value": ct_params["SSOUserEmail"]},
-                {"Key": "SSOUserFirstName", "Value": ct_params["SSOUserFirstName"]},
-                {"Key": "SSOUserLastName", "Value": ct_params["SSOUserLastName"]},
+                # Use the correct key from the .tf file
+                {"Key": "SSOUserFirstName", "Value": ct_params["firstName"]},
+                {"Key": "SSOUserLastName", "Value": ct_params["lastName"]},
             ],
         )
         logger.info(f"Service Catalog provision_product response: {response}")
         return response
+    except KeyError as e:
+        logger.error(f"A required parameter is missing in your account request .tf file: {e}")
+        raise
     except ClientError as e:
         logger.error(f"Failed to provision product for {account_name}: {e}")
         raise
