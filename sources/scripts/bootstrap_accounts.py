@@ -47,6 +47,9 @@ def provision_account(session, product_id, provisioning_artifact_id, account_nam
     sc = session.client("servicecatalog")
     try:
         logger.info(f"🔧 Attempting to provision product using PathId: {path_id}")
+        
+        # MODIFICATION: Correctly map firstName/lastName from the .tf file to the
+        # parameter names expected by the Service Catalog product.
         response = sc.provision_product(
             ProductId=product_id,
             ProvisioningArtifactId=provisioning_artifact_id,
@@ -57,8 +60,9 @@ def provision_account(session, product_id, provisioning_artifact_id, account_nam
                 {"Key": "AccountName", "Value": ct_params["AccountName"]},
                 {"Key": "ManagedOrganizationalUnit", "Value": ct_params["ManagedOrganizationalUnit"]},
                 {"Key": "SSOUserEmail", "Value": ct_params["SSOUserEmail"]},
-                {"Key": "SSOUserFirstName", "Value": ct_params["SSOUserFirstName"]},
-                {"Key": "SSOUserLastName", "Value": ct_params["SSOUserLastName"]},
+                # Use the correct keys from the .tf file
+                {"Key": "SSOUserFirstName", "Value": ct_params["firstName"]},
+                {"Key": "SSOUserLastName", "Value": ct_params["lastName"]},
             ],
         )
         logger.info(f"✅ Service Catalog provision_product response: {response}")
@@ -81,20 +85,16 @@ def main():
     sc_provisioning_artifact_id = os.environ.get("SC_PROVISIONING_ARTIFACT_ID")
     sc_launch_path_id = os.environ.get("SC_LAUNCH_PATH_ID")
     ct_launch_role_arn = os.environ.get("CT_LAUNCH_ROLE_ARN")
-    # New environment variable for the DynamoDB table name
     aft_request_table_name = os.environ.get("AFT_REQUEST_DDB_TABLE_NAME")
 
-    # Validate that all required environment variables are set
     if not all([sqs_queue_url, sc_product_id, sc_provisioning_artifact_id, sc_launch_path_id, ct_launch_role_arn, aft_request_table_name]):
         logger.error("❌ Missing one or more required environment variables.")
         raise ValueError("Missing required environment variables.")
 
-    # This session is for the AFT account, where the DDB table lives
     aft_session = boto3.Session(region_name=ct_management_region)
     sts = aft_session.client("sts")
 
     try:
-        # Assume the launch role in the Control Tower Management account
         logger.info(f"🔐 Assuming launch role {ct_launch_role_arn} in CT account...")
         assumed_role_object = sts.assume_role(
             RoleArn=ct_launch_role_arn,
@@ -102,7 +102,6 @@ def main():
         )
         credentials = assumed_role_object['Credentials']
         
-        # Create a new session with the assumed role's credentials
         ct_session = boto3.Session(
             aws_access_key_id=credentials['AccessKeyId'],
             aws_secret_access_key=credentials['SecretAccessKey'],
@@ -126,7 +125,6 @@ def main():
             with open(filepath, "r") as f:
                 try:
                     data = hcl2.load(f)
-                    # Safely parse the account_request block from the HCL file
                     request = {}
                     for block in data.get("locals", []):
                         if "account_request" in block:
@@ -144,16 +142,12 @@ def main():
                         logger.warning(f"⚠️ Missing 'AccountEmail' in {filename}. Skipping.")
                         continue
 
-                    # *** NEW STEP: Write the request to DynamoDB ***
-                    # The downstream Lambda needs this record to exist.
                     logger.info(f"➕ Preparing to write request to DynamoDB for {account_email}")
                     ddb_item = request.copy()
-                    ddb_item['id'] = account_email # The 'id' is the primary key
+                    ddb_item['id'] = account_email
                     
-                    # Use the aft_session because the DDB table is in the AFT account.
                     write_to_dynamodb(aft_session, aft_request_table_name, ddb_item)
 
-                    # The rest of the process remains the same
                     account_tags = request.get("account_tags", {})
                     custom_fields = request.get("custom_fields", {})
                     sqs_payload = {
