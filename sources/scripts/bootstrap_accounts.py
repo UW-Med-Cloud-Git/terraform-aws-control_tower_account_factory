@@ -146,6 +146,13 @@ def main():
                     ddb_item = request.copy()
                     ddb_item['id'] = account_email
                     
+                    # MODIFICATION: Convert maps to JSON strings before writing to DynamoDB
+                    # to match the format expected by the downstream Lambda.
+                    if 'account_tags' in ddb_item:
+                        ddb_item['account_tags'] = json.dumps(ddb_item['account_tags'])
+                    if 'custom_fields' in ddb_item:
+                        ddb_item['custom_fields'] = json.dumps(ddb_item['custom_fields'])
+
                     write_to_dynamodb(aft_session, aft_request_table_name, ddb_item)
 
                     account_tags = request.get("account_tags", {})
