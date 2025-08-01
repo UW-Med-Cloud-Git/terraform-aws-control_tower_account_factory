@@ -147,8 +147,7 @@ def main():
                     ddb_item = request.copy()
                     ddb_item['id'] = account_email
                     
-                    # MODIFICATION: Add the missing account_customizations_name key.
-                    # This is required by the downstream Step Function.
+                    # MODIFICATION: Corrected the state machine name.
                     ddb_item['account_customizations_name'] = "aft-account-provisioning-framework"
                     
                     # MODIFICATION: Convert maps to JSON strings before writing to DynamoDB
