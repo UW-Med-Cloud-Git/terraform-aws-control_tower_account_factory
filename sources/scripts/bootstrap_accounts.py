@@ -149,7 +149,7 @@ def main():
                     
                     # MODIFICATION: Add the missing account_customizations_name key.
                     # This is required by the downstream Step Function.
-                    ddb_item['account_customizations_name'] = account_name
+                    ddb_item['account_customizations_name'] = "aft-account-provisioning-framework"
                     
                     # MODIFICATION: Convert maps to JSON strings before writing to DynamoDB
                     # to match the format expected by the downstream Lambda.
