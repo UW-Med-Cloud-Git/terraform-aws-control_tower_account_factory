@@ -137,14 +137,19 @@ def main():
 
                     ct_params = request.get("control_tower_parameters", {})
                     account_email = ct_params.get("AccountEmail")
+                    account_name = ct_params.get("AccountName")
 
-                    if not account_email:
-                        logger.warning(f"⚠️ Missing 'AccountEmail' in {filename}. Skipping.")
+                    if not account_email or not account_name:
+                        logger.warning(f"⚠️ Missing 'AccountEmail' or 'AccountName' in {filename}. Skipping.")
                         continue
 
                     logger.info(f"➕ Preparing to write request to DynamoDB for {account_email}")
                     ddb_item = request.copy()
                     ddb_item['id'] = account_email
+                    
+                    # MODIFICATION: Add the missing account_customizations_name key.
+                    # This is required by the downstream Step Function.
+                    ddb_item['account_customizations_name'] = account_name
                     
                     # MODIFICATION: Convert maps to JSON strings before writing to DynamoDB
                     # to match the format expected by the downstream Lambda.
@@ -166,7 +171,6 @@ def main():
                     logger.info(f"✅ Preparing to send request from: {filename}")
                     send_sqs_message(ct_session, sqs_queue_url, sqs_payload, message_group_id=account_email)
                     
-                    account_name = ct_params["AccountName"]
                     logger.info(f"🚀 Calling provision_account for {account_name}")
                     provision_account(
                         ct_session,
