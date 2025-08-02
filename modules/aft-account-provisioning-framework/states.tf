@@ -4,16 +4,17 @@
 locals {
   state_machine_source = "${path.module}/states/aft_account_provisioning_framework.asl.json"
   replacements_map = {
-    current_partition                                                 = data.aws_partition.current.partition
-    create_role_function_name                                         = aws_lambda_function.create_role.function_name
-    tag_account_function_name                                         = aws_lambda_function.tag_account.function_name
-    persist_metadata_function_name                                    = aws_lambda_function.persist_metadata.function_name
-    account_metadata_ssm_function_name                                = aws_lambda_function.account_metadata_ssm.function_name
-    aft_notification_arn                                              = var.aft_sns_topic_arn
-    aft_failure_notification_arn                                      = var.aft_failure_sns_topic_arn
-    aft_account_provisioning_customizations_state_machine_arn         = "arn:${data.aws_partition.current.partition}:states:${data.aws_region.aft_management.name}:${data.aws_caller_identity.aft_management.account_id}:stateMachine:${var.aft_account_provisioning_customizations_sfn_name}"
-    customizations_trigger_state_machine_arn                          = "arn:${data.aws_partition.current.partition}:states:${data.aws_region.aft_management.name}:${data.aws_caller_identity.aft_management.account_id}:stateMachine:${var.trigger_customizations_sfn_name}"
-    aft_account_provisioning_framework_aft_features_state_machine_arn = "arn:${data.aws_partition.current.partition}:states:${data.aws_region.aft_management.name}:${data.aws_caller_identity.aft_management.account_id}:stateMachine:${var.aft_features_sfn_name}"
+    current_partition                                 = data.aws_partition.current.partition
+    persist_metadata_function_arn                     = aws_lambda_function.persist_metadata.arn
+    create_role_function_arn                          = aws_lambda_function.create_role.arn
+    tag_account_function_arn                          = aws_lambda_function.tag_account.arn
+    account_metadata_ssm_function_arn                 = aws_lambda_function.account_metadata_ssm.arn
+    aft_features_sfn_arn                              = "arn:${data.aws_partition.current.partition}:states:${data.aws_region.aft_management.name}:${data.aws_caller_identity.aft_management.account_id}:stateMachine:${var.aft_features_sfn_name}"
+    
+    account_customizations_sfn_arn                    = "arn:${data.aws_partition.current.partition}:states:${data.aws_region.aft_management.name}:${data.aws_caller_identity.aft_management.account_id}:stateMachine:aft-account-provisioning-framework"
+    
+    aft_notification_arn                              = var.aft_sns_topic_arn
+    aft_failure_notification_arn                      = var.aft_failure_sns_topic_arn
   }
 }
 
