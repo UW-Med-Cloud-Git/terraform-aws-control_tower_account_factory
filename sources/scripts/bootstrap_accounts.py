@@ -48,8 +48,6 @@ def provision_account(session, product_id, provisioning_artifact_id, account_nam
     try:
         logger.info(f"🔧 Attempting to provision product using PathId: {path_id}")
         
-        # MODIFICATION: Correctly map firstName/lastName from the .tf file to the
-        # parameter names expected by the Service Catalog product.
         response = sc.provision_product(
             ProductId=product_id,
             ProvisioningArtifactId=provisioning_artifact_id,
@@ -60,7 +58,6 @@ def provision_account(session, product_id, provisioning_artifact_id, account_nam
                 {"Key": "AccountName", "Value": ct_params["AccountName"]},
                 {"Key": "ManagedOrganizationalUnit", "Value": ct_params["ManagedOrganizationalUnit"]},
                 {"Key": "SSOUserEmail", "Value": ct_params["SSOUserEmail"]},
-                # Use the correct keys from the .tf file
                 {"Key": "SSOUserFirstName", "Value": ct_params["firstName"]},
                 {"Key": "SSOUserLastName", "Value": ct_params["lastName"]},
             ],
@@ -146,16 +143,13 @@ def main():
                     logger.info(f"➕ Preparing to write request to DynamoDB for {account_email}")
                     ddb_item = request.copy()
                     ddb_item['id'] = account_email
-                    
                     ddb_item['account_customizations_name'] = "aft-account-provisioning-framework"
                     
-                    # MODIFICATION: Add the missing 'run_create_pipeline' flag required by the Step Function.
-                    ddb_item['run_create_pipeline'] = True
-
-                    if 'account_tags' in ddb_item:
-                        ddb_item['account_tags'] = json.dumps(ddb_item['account_tags'])
-                    if 'custom_fields' in ddb_item:
-                        ddb_item['custom_fields'] = json.dumps(ddb_item['custom_fields'])
+                    # Convert all map/dict objects to JSON strings before writing to DynamoDB
+                    # to match the format expected by the downstream Lambda functions.
+                    for key, value in ddb_item.items():
+                        if isinstance(value, dict):
+                            ddb_item[key] = json.dumps(value)
 
                     write_to_dynamodb(aft_session, aft_request_table_name, ddb_item)
 
